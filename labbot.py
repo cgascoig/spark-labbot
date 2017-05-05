@@ -17,11 +17,14 @@ APIC_PASSWORD = os.environ.get('APIC_PASSWORD', None)
 if 'SQS_QUEUE_NAME' in os.environ:
     QUEUE_NAME = os.environ['SQS_QUEUE_NAME']
 else:
-    cf = boto3.client('cloudformation')
-    stack = cf.describe_stacks(StackName='chat-ops-prod')
-    for out in stack['Stacks'][0]['Outputs']:
-        if out['OutputKey'] == 'recvQueue':
-            QUEUE_NAME = out['OutputValue']
+    try:
+        cf = boto3.client('cloudformation')
+        stack = cf.describe_stacks(StackName='chat-ops-prod')
+        for out in stack['Stacks'][0]['Outputs']:
+            if out['OutputKey'] == 'recvQueue':
+                QUEUE_NAME = out['OutputValue']
+    except:
+        QUEUE_NAME=""
 
 def spark_api_call(method, endpoint, body=None):
     headers = {
@@ -90,16 +93,40 @@ def cmd_show_interface(args):
 def cmd_error(args):
     return "Sorry, an error occurred: %s" % str(args['exception']), args['from_email'], args['room_id']
     
+def cmd_show_leaf(args):
+    return "show leaf"
+    
+
 def find_cmd_func_and_args(message, from_email, room_id):
-    for regex_list, func in COMMANDS:
-        for regex in regex_list:
-            m = re.match(regex, message)
-            if m:
-                try:
-                    return (func, m.groupdict())
-                except Exception as e:
-                    return (cmd_error, {'from_email':from_email, 'room_id':room_id, 'exception': e})
-                return
+    tokens = message.split()
+    cmd_tree_ptr = COMMANDS
+    collected_args={}
+    
+    while len(tokens)>0:
+        tok = tokens.pop(0)
+        matched_tokens=[]
+        for cmd_token, func_or_subcmd in cmd_tree_ptr:
+            if cmd_token[0]=='(':
+                # This is a regex that should match an arg
+                m = re.match(cmd_token, tok)
+                if m:
+                    collected_args.update(m.groupdict())
+                    matched_tokens.append((cmd_token, func_or_subcmd))
+            # TODO - need to sanitise token before using it as RE?
+            elif re.match(tok, cmd_token):
+                print "matched token '%s'"%cmd_token
+                matched_tokens.append((cmd_token,func_or_subcmd))
+                
+        if len(matched_tokens)>1:
+            print "multiple matches"
+            break
+        
+        if len(matched_tokens)==1:
+            func_or_subcmd = matched_tokens[0][1]
+            if func_or_subcmd.__class__ is list:
+                cmd_tree_ptr = func_or_subcmd
+                continue
+            return (func_or_subcmd, collected_args)
                 
     # Didn't find a command - return help
     return (cmd_help, {})
@@ -121,10 +148,19 @@ def send_reply(message, from_email, room_id):
     })
     
 COMMANDS = [
-    ([r'^help$'], cmd_help),
-    ([r'^hello|hey|hi$'], cmd_hello),
-    ([r'^show leaf (?P<node>\d+) interface (?P<interface>eth\d+/\d+)$'], cmd_show_interface)
+    ("help", cmd_help),
+    ("hello", cmd_hello),
+    ("show", [
+        ("leaf", [
+            (r'(?P<node>\d+)', [
+                ('interface', [
+                    (r'(?P<interface>et?h?\d+/\d+)', cmd_show_interface)
+                ]),
+            ])
+        ]),
+    ])
 ]
+
 
 if __name__ == '__main__':
     print("Starting labbot server ...")
