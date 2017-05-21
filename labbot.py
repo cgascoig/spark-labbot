@@ -3,67 +3,33 @@ import boto3
 import json
 import os
 import re
-import requests
-import httplib #only used to share spark code with Lambda which doesn't have requests :-(
+
+from conversation import ConversationManager, Conversation
+import aci
+import spark
 
 #Time to wait for new messages every loop (long SQS polling). 
 # must be 0 <= WAIT_TIME <= 20
 WAIT_TIME=20
 
-SPARK_TOKEN = os.environ.get('SPARK_BOT_TOKEN', None)
-APIC_URL = os.environ.get('APIC_URL', None)
-APIC_USERNAME = os.environ.get('APIC_USERNAME', None)
-APIC_PASSWORD = os.environ.get('APIC_PASSWORD', None)
-if 'SQS_QUEUE_NAME' in os.environ:
-    QUEUE_NAME = os.environ['SQS_QUEUE_NAME']
+
+if 'SQS_QUEUE_NAME_BASE' in os.environ:
+    QUEUE_NAME_BASE = os.environ['SQS_QUEUE_NAME_BASE']
+    QUEUE_NAME_RECV = QUEUE_NAME_BASE+'-recv'
+    QUEUE_NAME_SEND = QUEUE_NAME_BASE+'-send'
 else:
     try:
         cf = boto3.client('cloudformation')
         stack = cf.describe_stacks(StackName='chat-ops-prod')
         for out in stack['Stacks'][0]['Outputs']:
             if out['OutputKey'] == 'recvQueue':
-                QUEUE_NAME = out['OutputValue']
+                QUEUE_NAME_RECV = out['OutputValue']
+            if out['OutputKey'] == 'sendQueue':
+                QUEUE_NAME_SEND = out['OutputValue']
     except:
-        QUEUE_NAME=""
+        QUEUE_NAME_RECV=""
+        QUEUE_NAME_SEND=""
 
-def spark_api_call(method, endpoint, body=None):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + SPARK_TOKEN, 
-    }
-    
-    conn=httplib.HTTPSConnection("api.ciscospark.com", 443)
-    conn.request(method,endpoint, json.dumps(body), headers)
-    
-    print "About to send spark API request"
-    resp = conn.getresponse()
-    print "Got response from spark: %s %s" % (resp.status, resp.reason)
-    
-    resp_data = resp.read()
-    print "Response data: %s"%resp_data
-    
-    try:
-        json_data = json.loads(resp_data)
-    except:
-        json_data=None
-        
-    return json_data
-    
-session = requests.Session()
-session.verify = False
-
-def _apic_login():
-    login_resp = session.post(APIC_URL+"/api/aaaLogin.json", json={'aaaUser': {'attributes': {'name':APIC_USERNAME, 'pwd':APIC_PASSWORD}}})
-
-def apic_api_call(method, endpoint, json=None):
-    resp = session.request(method, APIC_URL+endpoint, json=json)
-    if resp.status_code==403:
-        _apic_login()
-        
-        resp = session.request(method, APIC_URL+endpoint, json=json)
-    
-    return resp.json()
-    
 
 def cmd_help(args):
     return "just send commands ... it's not that hard"
@@ -71,33 +37,12 @@ def cmd_help(args):
 def cmd_hello(args):
     return "yeah?"
     
-def cmd_show_interface(args):
-    node = args['node']
-    interface = args['interface']
-    query = "/api/mo/uni.json?query-target=subtree&target-subtree-class=fvRsPathAtt&query-target-filter=eq(fvRsPathAtt.tDn,\"topology/pod-1/paths-%s/pathep-[%s]\")" % (node, interface)
-    
-    res = apic_api_call('GET', query)
-    
-    encaps=[]
-    for path in res['imdata']:
-        attrs = path['fvRsPathAtt']['attributes']
-        m = re.match(r'(.*)/rspathAtt', attrs['dn'])
-        epg_dn = m.group(1)
-        encap = attrs['encap']
-        encaps.append("%s: %s" % (encap, epg_dn))
-    
-    reply = "Encaps on leaf %s interface %s: \n\n%s" % (node, interface, '\n'.join(encaps))
-    
-    return reply
-    
 def cmd_error(args):
     return "Sorry, an error occurred: %s" % str(args['exception']), args['from_email'], args['room_id']
     
-def cmd_show_leaf(args):
-    return "show leaf"
-    
 
-def find_cmd_func_and_args(message, from_email, room_id):
+
+def find_cmd_func_and_args(message, room_id, from_email):
     tokens = message.split()
     cmd_tree_ptr = COMMANDS
     collected_args={}
@@ -123,7 +68,7 @@ def find_cmd_func_and_args(message, from_email, room_id):
         
         if len(matched_tokens)==1:
             func_or_subcmd = matched_tokens[0][1]
-            if func_or_subcmd.__class__ is list:
+            if isinstance(func_or_subcmd, list):
                 cmd_tree_ptr = func_or_subcmd
                 continue
             return (func_or_subcmd, collected_args)
@@ -131,33 +76,75 @@ def find_cmd_func_and_args(message, from_email, room_id):
     # Didn't find a command - return help
     return (cmd_help, {})
     
-def generate_response(message, from_email, room_id):
-    func, args = find_cmd_func_and_args(message, from_email, room_id)
+def generate_response(message, room_id, from_email):
+    func, args = find_cmd_func_and_args(message, room_id, from_email)
+    
+    try:
+        is_conv = issubclass(func, Conversation)
+    except:
+        is_conv = False
+    
+    if is_conv:
+        # The command parsing has led us to a Conversation class
+        #  instantiate it and get an initial reply from the conv
+        conv_class = func
+        conv = conv_class()
+        
+        conversation_manager.create_conversation(room_id, from_email, conv)
+        return conv.process_message(None)
+    
     
     return func(args)
     
-def process_message(message, from_email, room_id):
-    reply = generate_response(message, from_email, room_id)
-    send_reply(reply, from_email, room_id)
-
-def send_reply(message, from_email, room_id):
-    print("Sending reply to %s (roomId: %s): %s" % (from_email, room_id, message))
-    spark_api_call('POST', '/v1/messages', {
-        "roomId": room_id,
-        "text": message
-    })
+def process_message(conversation_manager, message, room_id, from_email):
+    #check if there is an existing conversation
+    conv = conversation_manager.get_existing_conversation(room_id, from_email)
+    if conv is None:
+        reply = generate_response(message, room_id, from_email)
+    else:
+        finished, reply = conv.process_message(message)
+        if finished is True:
+            conversation_manager.delete_conversation(room_id, from_email)
+            if reply is None:
+                return
+        
+    spark.send_message(reply, room_id, from_email)
     
 COMMANDS = [
     ("help", cmd_help),
     ("hello", cmd_hello),
     ("show", [
+        ("health", aci.cmd_fabric_health),
         ("leaf", [
             (r'(?P<node>\d+)', [
                 ('interface', [
-                    (r'(?P<interface>et?h?\d+/\d+)', cmd_show_interface)
+                    (r'(?P<interface>et?h?\d+/\d+)', aci.cmd_show_interface)
                 ]),
             ])
         ]),
+    ]),
+    ("set", [
+        ("vlan", [
+            (r'(?P<vlan>\d+)', [
+                ('leaf', [
+                    (r'(?P<leaf>\d+)', [
+                        'interface', [
+                            (r'(?P<interface>et?h?\d+/\d+)', [
+                                ('tenant', [(r'(?P<tenant>\w+)')])
+                            ])
+                        ]
+                    ])
+                ])
+            ])
+        ]
+        )
+    ]),
+    ("configure", [
+        ("vlan", [
+            ("on", [
+                ("port", aci.ConfigureVlanPort)
+            ])
+        ])
     ])
 ]
 
@@ -168,17 +155,45 @@ if __name__ == '__main__':
     sqs = boto3.resource('sqs')
     
     
-    print "Finding queue %s by name" % QUEUE_NAME
-    queue = sqs.get_queue_by_name(QueueName=QUEUE_NAME)
+    print "Finding queue %s by name" % QUEUE_NAME_RECV
+    queue = sqs.get_queue_by_name(QueueName=QUEUE_NAME_RECV)
+    send_queue = sqs.get_queue_by_name(QueueName=QUEUE_NAME_SEND)
+    
+    conversation_manager = ConversationManager()
     
     while True:
+        conversation_manager.timeout_conversations()
         print("Waiting %d seconds for new messages" % WAIT_TIME)
         messages = queue.receive_messages(WaitTimeSeconds=WAIT_TIME)
         for message in messages:
             print("Message received: %s"%message.body)
             message.delete()
             
-            message_json = json.loads(message.body)
-            print("Message from %s: %s" % (message_json['personEmail'], message_json['text']))
-            
-            process_message(message_json['text'], message_json['personEmail'], message_json['roomId'])
+            try:
+                message_json = json.loads(message.body)
+            except:
+                message_json = None
+                print "Unable to decode message - invalid JSON, ignoring."
+                
+            if message_json:
+                if 'roomId' in message_json:
+                    print("Message from %s: %s" % (message_json['personEmail'], message_json['text']))
+                    
+                    try:
+                        process_message(conversation_manager, message_json['text'], message_json['roomId'], message_json['personEmail'])
+                    except Exception as e:
+                        print("An exception occurred while processing message: %s"%e)
+                        
+                elif 'type' in message_json and message_json['type']=='alexa':
+                    print("Received alexa request: %s" % message_json['text'])
+                    
+                    try:
+                        response = generate_response(message_json['text'], None, None)
+                    except Exception as e:
+                        print("An exception occurred while processing message: %s"%e)
+                        
+                    print("Proposed response: %s" % response)
+                    send_queue.send_message(MessageBody=json.dumps({
+                        'type': 'alexa',
+                        'text': response,
+                    }))

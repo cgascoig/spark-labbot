@@ -29,6 +29,17 @@ class TestParseResponse(unittest.TestCase):
         ]
         self.do_tests(tests)
         
+    # def test_set_vlan(self):
+    #     self.do_tests([
+    #         ("set vlan 3000 leaf 111 interface eth1/2 tenant legacy-lab application legacy-lab epg vlan-3000", labbot.cmd_set_vlan, {
+    #             'vlan': '3000',
+    #             'leaf': '111',
+    #             'interface': 'eth1/2',
+    #             'tenant': 'legacy-lab',
+    #             'application': 'legacy-lab',
+    #             'epg': 'vlan-3000'
+    #         })
+    #     ])
 
 if __name__ == '__main__':
     unittest.main()
