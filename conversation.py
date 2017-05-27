@@ -1,3 +1,4 @@
+import re
 import time
 import spark
 
@@ -13,7 +14,7 @@ class ConversationManager(object):
         conv = self.conversations.get(conv_id) # conv will be None if there is no existing conversation
         return conv
     
-    def timeout_conversations(self, timeout=30):
+    def timeout_conversations(self, timeout=120):
         """
         Find any conversations older than timeout and remove them
         """
@@ -37,6 +38,8 @@ class Conversation(object):
         self.args = {}
         self.start_time = time.time()
         self.current_arg = None
+        self.confirm_before_action = False
+        self.asked_confirmation = False
         
     def generate_opening(self):
         return "Welcome to the conversation. (if you see this then a subclass has forgotten to override it)"
@@ -49,6 +52,9 @@ class Conversation(object):
         
     def generate_timeout(self):
         return "Timed out waiting for %s"%self.current_arg
+        
+    def generate_confirm(self):
+        return "OK, I've collected these arguments: %s. OK to continue?" % self.args
         
     def get_age(self):
         """
@@ -76,6 +82,10 @@ class Conversation(object):
                 return True, self.generate_cancel()
         except:
             pass
+            
+        if self.asked_confirmation:
+            if re.match(r'^\s*[Yy]', message):
+                return True, self.execute_final_action()
            
         # TODO: probably more validation here 
         self.args[self.current_arg] = message
@@ -84,7 +94,11 @@ class Conversation(object):
             self.current_arg = self.required_args.pop(0)
             return False, self.generate_question()
         else:
-            return True, self.execute_final_action()
+            if self.confirm_before_action:
+                self.asked_confirmation = True
+                return False, self.generate_confirm()
+            else:
+                return True, self.execute_final_action()
             
     def execute_final_action(self):
         """
