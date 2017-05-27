@@ -145,6 +145,9 @@ COMMANDS = [
                 ("port", aci.ConfigureVlanPort)
             ])
         ])
+    ]),
+    ("interface", [
+        ("description", aci.InterfaceDescription)
     ])
 ]
 
