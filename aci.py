@@ -27,6 +27,7 @@ def resp_ok(resp):
     return resp.status_code >= 200 and resp.status_code < 300
     
 def cmd_show_interface(args):
+    "Show EPGs configured on  the interface"
     node = args['node']
     interface = args['interface']
     query = "/api/mo/uni.json?query-target=subtree&target-subtree-class=fvRsPathAtt&query-target-filter=eq(fvRsPathAtt.tDn,\"topology/pod-1/paths-%s/pathep-[%s]\")" % (node, interface)
@@ -46,6 +47,7 @@ def cmd_show_interface(args):
     return reply
     
 def cmd_fabric_health(args):
+    "Show the fabric health score"
     query = '/api/node/mo/topology/health.json'
     res = apic_api_call('GET', query).json()
     
@@ -92,6 +94,7 @@ def _extract_leaf(leaf):
         return None
 
 class ConfigureVlanPort(Conversation):
+    "Configure a legacy VLAN on an interface"
     def __init__(self):
         super(ConfigureVlanPort, self).__init__()
         self.required_args = ['leaf', 'interface', 'vlan']
@@ -198,6 +201,7 @@ class ConfigureVlanPort(Conversation):
         
         
 class InterfaceDescription(Conversation):
+    "Set the description on an interface"
     def __init__(self):
         super(InterfaceDescription, self).__init__()
         self.required_args = ['leaf', 'interface', 'description']

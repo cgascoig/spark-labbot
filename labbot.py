@@ -30,11 +30,43 @@ else:
         QUEUE_NAME_RECV=""
         QUEUE_NAME_SEND=""
 
+def generate_help_string(cur, parent, cmd_tree_ptr):
+    print "generate_help_string called with cur %s" % cur
+    new_cur = cur
+    
+    for cmd_token, subtree in cmd_tree_ptr:
+        print "Processing token %s", cmd_token
+        res = re.match(r'\(\?P(<.*>)', cmd_token)
+        if res:
+            cmd_token = res.group(1)
+        
+        if isinstance(subtree, list):
+            if parent:
+                new_parent = parent + ' ' + cmd_token
+            else:
+                new_parent = cmd_token
+            new_cur = new_cur + generate_help_string(cur, new_parent, subtree)
+        else:
+            if parent:
+                new_cur = new_cur + parent + ' ' + cmd_token + ': '
+            else:
+                new_cur = new_cur + cmd_token + ': '
+                
+            try:
+                new_cur = new_cur + subtree.__doc__ + '\n'
+            except:
+                new_cur = new_cur + '<no help available>\n'
+                
+    return new_cur
+            
 
 def cmd_help(args):
-    return "just send commands ... it's not that hard"
+    "Show the help message"
+    help_str = generate_help_string('', None, COMMANDS)
+    return help_str
     
 def cmd_hello(args):
+    "Say hello"
     return "yeah?"
     
 def cmd_error(args):
@@ -123,22 +155,22 @@ COMMANDS = [
             ])
         ]),
     ]),
-    ("set", [
-        ("vlan", [
-            (r'(?P<vlan>\d+)', [
-                ('leaf', [
-                    (r'(?P<leaf>\d+)', [
-                        'interface', [
-                            (r'(?P<interface>et?h?\d+/\d+)', [
-                                ('tenant', [(r'(?P<tenant>\w+)')])
-                            ])
-                        ]
-                    ])
-                ])
-            ])
-        ]
-        )
-    ]),
+    # ("set", [
+    #     ("vlan", [
+    #         (r'(?P<vlan>\d+)', [
+    #             ('leaf', [
+    #                 (r'(?P<leaf>\d+)', [
+    #                     'interface', [
+    #                         (r'(?P<interface>et?h?\d+/\d+)', [
+    #                             ('tenant', [(r'(?P<tenant>\w+)')])
+    #                         ])
+    #                     ]
+    #                 ])
+    #             ])
+    #         ])
+    #     ]
+    #     )
+    # ]),
     ("configure", [
         ("vlan", [
             ("on", [
