@@ -7,6 +7,7 @@ import re
 from conversation import ConversationManager, Conversation
 import aci
 import spark
+import nxos
 
 #Time to wait for new messages every loop (long SQS polling). 
 # must be 0 <= WAIT_TIME <= 20
@@ -180,6 +181,14 @@ COMMANDS = [
     ]),
     ("interface", [
         ("description", aci.InterfaceDescription)
+    ]),
+    ("create", [
+        ("vlan", [
+            (r'(?P<vlan>\d+)', nxos.cmd_create_vlan)
+        ])
+    ]),
+    ("get", [
+        ("vlans", nxos.cmd_get_vlans)
     ])
 ]
 
