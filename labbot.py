@@ -8,6 +8,7 @@ from conversation import ConversationManager, Conversation
 import aci
 import spark
 import nxos
+import cloud_center
 
 #Time to wait for new messages every loop (long SQS polling). 
 # must be 0 <= WAIT_TIME <= 20
@@ -189,6 +190,9 @@ COMMANDS = [
     ]),
     ("get", [
         ("vlans", nxos.cmd_get_vlans)
+    ]),
+    ("launch", [
+        ("vm", cloud_center.CloudCenterLaunchVM)
     ])
 ]
 
